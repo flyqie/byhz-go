@@ -963,24 +963,6 @@ textarea:focus-visible {
     display: none;
 }
 
-.agora-box {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    background: #020304;
-}
-
-.agora-box > div {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.agora-box video {
-    width: 100% !important;
-    height: 100% !important;
-    object-fit: contain;
-}
-
 .player-empty {
     position: absolute;
     inset: 0;

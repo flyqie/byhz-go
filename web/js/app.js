@@ -28,6 +28,10 @@
         hls: null,
         mpegts: null,
         agora: null,
+        agoraStream: null,
+        agoraVideoTracks: new Map(),
+        agoraAudioTracks: new Map(),
+        agoraFallbackAudio: new Set(),
         playbackToken: 0,
         agoraLoader: null,
 
@@ -82,7 +86,6 @@
         el.loadingRing = document.getElementById('loadingRing');
         el.liveDot = document.getElementById('liveDot');
         el.player = document.getElementById('player');
-        el.agoraBox = document.getElementById('agoraBox');
         el.playerEmpty = document.getElementById('playerEmpty');
         el.playerNotice = document.getElementById('playerNotice');
         el.openChannelsBtn = document.getElementById('openChannelsBtn');
@@ -117,6 +120,7 @@
         el.sidebarClose.addEventListener('click', () => toggleSidebar(false));
         el.overlay.addEventListener('click', () => toggleSidebar(false));
         el.openChannelsBtn.addEventListener('click', () => toggleSidebar(true));
+        el.player.addEventListener('volumechange', applyAgoraVolumeState);
 
         document.addEventListener('keydown', onDocumentKeydown);
         window.addEventListener('resize', onWindowResize);
@@ -636,10 +640,11 @@
         state.currentRoom = room;
         updateSelection();
 
-        el.roomTitle.textContent = room.name;
+        // Stop the previous stream immediately; otherwise it keeps playing
+        // behind the loading state and any failure notice.
+        teardownPlayer();
         el.playerEmpty.hidden = true;
-        el.playerNotice.classList.add('hidden');
-        el.playerNotice.replaceChildren();
+        el.roomTitle.textContent = room.name;
         setModeBadge('', '');
         setOrigin('');
         setInfo('正在获取播放参数…');
@@ -719,12 +724,15 @@
 
         try { el.player.pause(); } catch (_error) {}
         try {
+            el.player.srcObject = null;
             el.player.removeAttribute('src');
             el.player.load();
         } catch (_error) {}
         el.player.hidden = false;
-        el.agoraBox.replaceChildren();
-        el.agoraBox.classList.add('hidden');
+        state.agoraStream = null;
+        state.agoraVideoTracks.clear();
+        state.agoraAudioTracks.clear();
+        state.agoraFallbackAudio.clear();
         el.playerNotice.classList.add('hidden');
         el.playerNotice.replaceChildren();
         setLive(false);
@@ -870,10 +878,11 @@
         }
         if (token !== state.playbackToken) return;
 
-        el.player.hidden = true;
-        const box = el.agoraBox;
-        box.replaceChildren();
-        box.classList.remove('hidden');
+        // Feed the remote tracks into the same native <video> element used by
+        // HLS/FLV, so volume, mute and fullscreen keep the browser controls.
+        const stream = new MediaStream();
+        state.agoraStream = stream;
+        el.player.srcObject = stream;
         setInfo('正在加入 Agora 频道…');
 
         const client = AgoraRTC.createClient({ mode: 'live', codec: 'vp8' });
@@ -886,14 +895,47 @@
                 if (token === state.playbackToken) showToast('订阅远端流失败：' + error, 'error');
                 return;
             }
-            if (mediaType === 'video' && user.videoTrack) user.videoTrack.play(box);
-            if (mediaType === 'audio' && user.audioTrack) user.audioTrack.play();
+            if (token !== state.playbackToken) return;
+
+            if (mediaType === 'video' && user.videoTrack) {
+                const mediaTrack = mediaStreamTrackOf(user.videoTrack);
+                if (!mediaTrack) {
+                    showPlaybackError('无法读取 Agora 远端视频轨道');
+                    return;
+                }
+                state.agoraVideoTracks.set(user.videoTrack, mediaTrack);
+                stream.addTrack(mediaTrack);
+                startAgoraPlayback(token);
+            }
+
+            if (mediaType === 'audio' && user.audioTrack) {
+                const mediaTrack = mediaStreamTrackOf(user.audioTrack);
+                if (mediaTrack) {
+                    state.agoraAudioTracks.set(user.audioTrack, mediaTrack);
+                    stream.addTrack(mediaTrack);
+                    startAgoraPlayback(token);
+                } else {
+                    // Fall back to SDK audio playback; keep the native volume
+                    // slider working by forwarding it to setVolume().
+                    state.agoraFallbackAudio.add(user.audioTrack);
+                    try { user.audioTrack.play(); } catch (_error) {}
+                    applyAgoraVolumeState();
+                }
+            }
         });
+
         client.on('user-unpublished', (user, mediaType) => {
             if (mediaType === 'video' && user.videoTrack) {
+                const mediaTrack = state.agoraVideoTracks.get(user.videoTrack);
+                if (mediaTrack) stream.removeTrack(mediaTrack);
+                state.agoraVideoTracks.delete(user.videoTrack);
                 try { user.videoTrack.stop(); } catch (_error) {}
             }
             if (mediaType === 'audio' && user.audioTrack) {
+                const mediaTrack = state.agoraAudioTracks.get(user.audioTrack);
+                if (mediaTrack) stream.removeTrack(mediaTrack);
+                state.agoraAudioTracks.delete(user.audioTrack);
+                state.agoraFallbackAudio.delete(user.audioTrack);
                 try { user.audioTrack.stop(); } catch (_error) {}
             }
         });
@@ -915,11 +957,45 @@
             if (token !== state.playbackToken) return;
             state.agora = null;
             try { await client.leave(); } catch (_error) {}
-            box.replaceChildren();
-            box.classList.add('hidden');
-            el.player.hidden = false;
+            el.player.srcObject = null;
+            state.agoraStream = null;
+            state.agoraVideoTracks.clear();
+            state.agoraAudioTracks.clear();
+            state.agoraFallbackAudio.clear();
             showPlaybackError('加入 Agora 频道失败：' + (error && error.message ? error.message : error));
         }
+    }
+
+    function mediaStreamTrackOf(track) {
+        if (!track || typeof track.getMediaStreamTrack !== 'function') return null;
+        try {
+            const mediaTrack = track.getMediaStreamTrack();
+            return mediaTrack && mediaTrack.readyState === 'live' ? mediaTrack : null;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    function startAgoraPlayback(token) {
+        if (token !== state.playbackToken) return;
+        const result = el.player.play();
+        if (result && typeof result.catch === 'function') {
+            result.catch(() => {
+                if (token === state.playbackToken) {
+                    setInfo('浏览器拦截了自动播放，请点击播放按钮');
+                }
+            });
+        }
+    }
+
+    function applyAgoraVolumeState() {
+        if (!state.agoraFallbackAudio.size) return;
+        const volume = el.player.muted ? 0 : Math.round(el.player.volume * 100);
+        state.agoraFallbackAudio.forEach(track => {
+            try {
+                if (typeof track.setVolume === 'function') track.setVolume(volume);
+            } catch (_error) {}
+        });
     }
 
     function showUnsupported(info, room) {
@@ -939,7 +1015,8 @@
         note.textContent = info.note ||
             '服务端未能生成可用的播放参数，请稍后重试或选择其他直播间。';
         card.appendChild(note);
-        card.appendChild(buildNoticeActions(room || state.currentRoom));
+        const actions = buildNoticeActions(room || state.currentRoom);
+        if (actions) card.appendChild(actions);
 
         el.playerNotice.replaceChildren(card);
         el.playerNotice.classList.remove('hidden');
@@ -947,30 +1024,23 @@
     }
 
     function buildNoticeActions(room) {
+        if (!room) return null;
+
         const actions = document.createElement('div');
         actions.className = 'notice-actions';
 
-        if (room) {
-            const retry = document.createElement('button');
-            retry.type = 'button';
-            retry.className = 'secondary-button';
-            retry.textContent = '重试';
-            retry.addEventListener('click', () => openRoom(room));
-            actions.appendChild(retry);
-        }
-
-        const browse = document.createElement('button');
-        browse.type = 'button';
-        browse.className = 'secondary-button';
-        browse.textContent = '重新选择直播间';
-        browse.addEventListener('click', () => toggleSidebar(true));
-        actions.appendChild(browse);
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'secondary-button';
+        retry.textContent = '重试';
+        retry.addEventListener('click', () => openRoom(room));
+        actions.appendChild(retry);
 
         return actions;
     }
 
     function showPlaybackError(message) {
-        setLive(false);
+        teardownPlayer();
         setBusy(false);
         setInfo(message, 'error');
         showToast(message, 'error');
@@ -984,7 +1054,9 @@
         const note = document.createElement('p');
         note.textContent = message;
 
-        card.append(title, note, buildNoticeActions(state.currentRoom));
+        card.append(title, note);
+        const actions = buildNoticeActions(state.currentRoom);
+        if (actions) card.appendChild(actions);
 
         el.playerNotice.replaceChildren(card);
         el.playerNotice.classList.remove('hidden');
