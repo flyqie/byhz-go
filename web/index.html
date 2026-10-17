@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#080b12">
+    <title>鲍鱼盒子 · 直播</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="/js/vendor/hls.min.js" defer></script>
+    <script src="/js/vendor/mpegts.min.js" defer></script>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar" aria-label="直播间导航">
+            <header class="sidebar-header">
+                <div class="brand">
+                    <div class="brand-mark" aria-hidden="true">鲍</div>
+                    <div class="brand-copy">
+                        <p class="eyebrow">LIVE HUB</p>
+                        <h1>鲍鱼盒子</h1>
+                    </div>
+                    <button class="sidebar-close" id="sidebarClose" type="button" aria-label="收起直播间列表">收起</button>
+                </div>
+
+                <div class="sidebar-stats" aria-live="polite">
+                    <span id="roomCount">0 个房间</span>
+                    <span class="status-dot" id="connectionDot"><span id="connectionStatus">就绪</span></span>
+                </div>
+
+                <div class="account-row">
+                    <span class="member-pill" id="memberPill">游客</span>
+                    <div class="account-actions">
+                        <button class="ghost-button" id="accountToggle" type="button">会员登录</button>
+                        <button class="ghost-button" id="settingsToggle" type="button">服务器</button>
+                        <button class="ghost-button hidden" id="logoutBtn" type="button">退出</button>
+                    </div>
+                </div>
+
+                <div class="side-panel hidden" id="loginPanel">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>方式</span>
+                            <select id="loginKind">
+                                <option value="mobile">手机号</option>
+                                <option value="email">邮箱</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>账号</span>
+                            <input id="loginAccount" placeholder="手机号 / 邮箱" autocomplete="username">
+                        </label>
+                    </div>
+                    <div class="field-grid password-row">
+                        <label class="field">
+                            <span>密码</span>
+                            <input id="loginPassword" type="password" placeholder="至少 6 位" autocomplete="current-password">
+                        </label>
+                        <button class="primary-button" id="memberLogin" type="button">登录</button>
+                    </div>
+                    <p class="panel-hint">会员账号可解除服务端观看次数限制。</p>
+                </div>
+
+                <div class="side-panel hidden" id="settingsPanel">
+                    <label class="field">
+                        <span>API 地址</span>
+                        <input id="baseInput" placeholder="留空自动通过 DoH 发现">
+                    </label>
+                    <div class="panel-actions">
+                        <button class="primary-button" id="saveBase" type="button">保存并登录</button>
+                        <button class="ghost-button" id="relogin" type="button">重新登录</button>
+                    </div>
+                </div>
+            </header>
+
+            <div class="search-box">
+                <label class="sr-only" for="searchInput">搜索直播间</label>
+                <span class="search-icon" aria-hidden="true">⌕</span>
+                <input type="search" id="searchInput" placeholder="搜索主播 / 房间，回车确认" autocomplete="off" spellcheck="false">
+                <kbd>/</kbd>
+            </div>
+
+            <div class="tabs" role="tablist" aria-label="列表切换">
+                <button id="tabHot" class="tab active" type="button" role="tab" aria-selected="true">热门</button>
+                <button id="tabPlat" class="tab" type="button" role="tab" aria-selected="false">平台</button>
+            </div>
+
+            <div class="list-summary">
+                <span id="listLabel">房间列表</span>
+                <span id="visibleCount" class="summary-count">0</span>
+            </div>
+
+            <div class="list-wrap">
+                <ul id="roomList" class="room-list" role="listbox" aria-label="直播间列表">
+                    <li class="state-row loading">正在加载房间...</li>
+                </ul>
+                <div id="platList" class="platform-list hidden" role="listbox" aria-label="平台列表"></div>
+                <button id="moreBtn" class="more-button hidden" type="button">加载更多</button>
+            </div>
+
+            <footer class="sidebar-footer">
+                <span class="footer-mark" aria-hidden="true"></span>
+                <span>选择直播间开始观看</span>
+            </footer>
+        </aside>
+
+        <main class="player-area">
+            <header class="player-toolbar">
+                <div class="now-playing" aria-live="polite">
+                    <span class="live-indicator" id="liveDot" aria-hidden="true"></span>
+                    <span id="roomTitle">未选择直播间</span>
+                </div>
+                <div class="toolbar-actions">
+                    <span id="modeBadge" class="mode-badge hidden"></span>
+                    <span id="loadingRing" class="loading-ring hidden" aria-label="加载中"></span>
+                    <button class="menu-toggle" id="menuToggle" type="button" aria-label="打开直播间列表" aria-controls="sidebar" aria-expanded="false">房间列表</button>
+                </div>
+            </header>
+
+            <section class="player-shell" aria-label="视频播放器">
+                <video id="player" controls controlsList="nodownload noplaybackrate" disablepictureinpicture playsinline preload="metadata"></video>
+                <div id="agoraBox" class="agora-box hidden"></div>
+
+                <div id="playerEmpty" class="player-empty">
+                    <div class="empty-mark" aria-hidden="true">鲍</div>
+                    <h2>准备好观看</h2>
+                    <p>从左侧选择一个直播间开始播放</p>
+                    <button id="openChannelsBtn" class="secondary-button" type="button">浏览直播间</button>
+                </div>
+
+                <div id="playerNotice" class="player-notice hidden" role="dialog" aria-modal="false"></div>
+            </section>
+
+            <div id="channelInfo" class="channel-info" role="status" aria-live="polite">
+                <span id="infoText">就绪</span>
+                <span id="infoOrigin" class="info-origin"></span>
+            </div>
+        </main>
+    </div>
+
+    <div class="overlay" id="overlay" aria-hidden="true"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script src="/js/app.js" defer></script>
+</body>
+</html>
